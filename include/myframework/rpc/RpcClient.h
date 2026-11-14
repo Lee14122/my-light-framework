@@ -11,6 +11,7 @@
 #include "EventLoop.h"
 #include "Callbacks.h"
 #include "InetAddress.h"
+#include "TcpConnection.h"
 #include "myframework/rpc/RpcMessage.h"
 #include "myframework/rpc/RpcCodec.h"
 #include "myframework/rpc/Serializer.h"
@@ -78,6 +79,10 @@ public:
     // ---- 心跳配置 ----
     void setHeartbeatInterval(int seconds);  // 0=禁用
 
+    // ---- 连接回调（当第一条连接就绪时触发）----
+    using ConnectedCallback = std::function<void()>;
+    void setConnectedCallback(ConnectedCallback cb);
+
     // ---- 统计信息 ----
     int activeConnections() const;
     int pendingCalls() const;
@@ -86,13 +91,14 @@ private:
     // 一个 RPC 连接通道
     struct RpcChannel {
         TcpConnectionPtr conn;
-        RpcCodec codec;
+        std::shared_ptr<RpcCodec> codec;
         std::atomic_bool ready;
 
         RpcChannel() : ready(false) {}
     };
 
     void onMessage(RpcChannel* channel, const RpcMessage& msg);
+    void onConnectWrite(struct ConnectContext* ctx);
     RpcChannel* pickChannel();   // 选择一个可用连接（round-robin）
 
     // 待处理的调用
@@ -110,6 +116,8 @@ private:
 
     // seqId → callback
     std::unordered_map<uint32_t, PendingCall> pendingCalls_;
+
+    ConnectedCallback connectedCallback_;
 };
 
 } // namespace myframework
