@@ -6,8 +6,7 @@
 #include <memory>
 #include <vector>
 
-#include "EventLoop.h"
-#include "InetAddress.h"
+#include "myframework/net/MuduoCompat.h"
 #include "myframework/rpc/RpcMessage.h"
 #include "myframework/rpc/RpcCodec.h"
 #include "myframework/rpc/Serializer.h"
@@ -62,7 +61,7 @@ public:
 
 private:
     void onConnection(const TcpConnectionPtr& conn);
-    void onMessage(const TcpConnectionPtr& conn, Buffer* buf);
+    void onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp time);
     void onRpcMessage(const TcpConnectionPtr& conn, const RpcMessage& msg);
     void sendResponse(const TcpConnectionPtr& conn, const RpcMessage& response);
     void handleHeartbeat(const TcpConnectionPtr& conn, const RpcMessage& msg);
@@ -76,8 +75,12 @@ private:
     std::unordered_map<std::string,
                        std::unordered_map<std::string, MethodHandler>> services_;
 
-    // connection name → RpcCodec (per-connection codec)
-    std::unordered_map<std::string, std::shared_ptr<RpcCodec>> codecs_;
+    // connection name → per-connection info (codec + last active time for idle timeout)
+    struct ConnInfo {
+        std::shared_ptr<RpcCodec> codec;
+        Timestamp lastActiveTime;
+    };
+    std::unordered_map<std::string, ConnInfo> connections_;
 
     int heartbeatInterval_ = 0;
     int idleTimeout_       = 60;

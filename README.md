@@ -4,12 +4,12 @@
 
 My Light Framework 是一个基于 C++11 标准开发的高性能 RPC（Remote Procedure Call）框架，底层采用 epoll I/O 多路复用机制和 Reactor 事件驱动模型。该框架旨在提供类似 gRPC 的远程调用体验，支持自定义二进制协议、可插拔序列化、连接池、服务注册与发现、心跳保活等企业级特性。
 
-本项目为本科毕业设计项目，目标是从底层网络库（muduo-core）出发，自顶向下构建一个完整的、高性能的 RPC 框架。
+本项目为本科毕业设计项目，基于官方 muduo (chenshuo/muduo) 网络库，自顶向下构建一个完整的、高性能的 RPC 框架。
 
 ## 技术栈
 
 - **编程语言**：C++17
-- **网络库**：muduo-core（精简版，无命名空间，源码级依赖）
+- **网络库**：muduo (chenshuo/muduo) — `muduo::net` / `muduo::base` 命名空间
 - **I/O 模型**：epoll + Reactor 模式（one loop per thread）
 - **构建系统**：CMake 3.10+
 - **开发环境**：Linux (WSL2), GCC 15+
@@ -60,9 +60,9 @@ My Light Framework 是一个基于 C++11 标准开发的高性能 RPC（Remote P
     └────────┬────────────┘    └──────────────┘
              │
     ┌────────▼────────────┐
-    │    muduo-core       │
-    │ EventLoop / Channel │
-    │ Poller / Buffer     │
+    │   muduo::net        │
+    │ EventLoop / TcpServer│
+    │ Buffer / Channel     │
     └─────────────────────┘
 
 
@@ -259,13 +259,21 @@ my-light-framework/
 - CMake 3.10+
 - pthread 库
 
-### 前置依赖：编译 muduo-core
+### 前置依赖：编译官方 muduo
 
 ```bash
-cd /home/lee/projects/muduo-core
-mkdir build && cd build
-cmake .. && make -j$(nproc)
-# 产出 libmuduo_core.so 在 muduo-core/lib/ 目录下
+# 一键安装脚本（克隆 + CMake 配置 + 编译 + 安装）
+bash scripts/setup_muduo.sh
+
+# 或手动编译（安装到 ~/projects/muduo/install）
+git clone https://github.com/chenshuo/muduo ~/projects/muduo
+cd ~/projects/muduo
+cmake -S . -B build -DCMAKE_BUILD_TYPE=release \
+    -DBUILD_EXAMPLES=OFF -DBUILD_TEST=OFF \
+    -DCMAKE_INSTALL_PREFIX=$HOME/projects/muduo/install
+cmake --build build -j$(nproc)
+cmake --install build
+# 产物: include/muduo/net/*.h, lib/libmuduo_{net,base}.a
 ```
 
 ### 构建步骤
@@ -408,7 +416,7 @@ int main() {
 
 ### 已完成
 - [x] 项目架构设计与模块划分
-- [x] 开发环境搭建（WSL + CMake + muduo-core）
+- [x] 开发环境搭建（WSL + CMake + muduo）
 - [x] 底层网络库链接验证（EventLoop 创建测试通过）
 - [x] 框架骨架代码编写（所有模块头文件定义完成）
 
@@ -445,11 +453,12 @@ gRPC 基于 HTTP/2 + Protobuf，功能强大但依赖较重。本项目的目标
 - **自定义二进制协议**（而非 HTTP/JSON）：帧头紧凑（28 字节），无冗余 HTTP 头开销，性能更好
 - **JSON 序列化**作为默认：方便开发调试，未来可切换到二进制序列化获得更高性能
 
-### muduo-core 约束
+### muduo 依赖
 
-- muduo-core 没有命名空间，所有类直接暴露在全局作用域
-- 包含头文件必须扁平化：`#include <EventLoop.h>`
-- **绝对禁止修改** muduo-core 源码，仅通过 CMake 链接
+- 使用官方 muduo (chenshuo/muduo)，安装到 `~/projects/muduo/install`
+- 命名空间：`muduo::net` / `muduo::base`，框架通过 `MuduoCompat.h` 引入别名
+- 链接库：`muduo_net` + `muduo_base`（静态库）
+- muduo-core 为历史依赖，已不再链接
 
 ## 参考文献
 

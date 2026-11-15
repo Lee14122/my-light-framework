@@ -15,8 +15,8 @@ RpcServer::RpcServer(EventLoop* loop, const InetAddress& addr, const std::string
         });
 
     adapter_->setMessageCallback(
-        [this](const TcpConnectionPtr& conn, Buffer* buf) {
-            this->onMessage(conn, buf);
+        [this](const TcpConnectionPtr& conn, Buffer* buf, Timestamp time) {
+            this->onMessage(conn, buf, time);
         });
 }
 
@@ -74,11 +74,15 @@ void RpcServer::onConnection(const TcpConnectionPtr& conn) {
                 this->onRpcMessage(conn, msg);
             });
 
-        codecs_[conn->name()] = codec;
+        ConnInfo info;
+        info.codec = codec;
+        info.lastActiveTime = Timestamp::now();
+        connections_[conn->name()] = std::move(info);
+
         MFLOG_INFO("RpcServer", "RPC connection established: %s",
                    conn->name().c_str());
     } else {
-        codecs_.erase(conn->name());
+        connections_.erase(conn->name());
         MFLOG_INFO("RpcServer", "RPC connection closed: %s",
                    conn->name().c_str());
     }
@@ -86,15 +90,17 @@ void RpcServer::onConnection(const TcpConnectionPtr& conn) {
 
 // ========== 数据到达 ==========
 
-void RpcServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf) {
-    auto it = codecs_.find(conn->name());
-    if (it == codecs_.end()) {
+void RpcServer::onMessage(const TcpConnectionPtr& conn, Buffer* buf, Timestamp time) {
+    auto it = connections_.find(conn->name());
+    if (it == connections_.end()) {
         MFLOG_WARN("RpcServer", "No codec for connection %s",
                    conn->name().c_str());
         buf->retrieveAll();
         return;
     }
-    it->second->onData(buf);
+    // 更新最后活跃时间（idle timeout 用）
+    it->second.lastActiveTime = time;
+    it->second.codec->onData(buf);
 }
 
 // ========== 收到完整 RPC 消息 ==========

@@ -1,6 +1,6 @@
 # My Light RPC Framework — 学习文档
 
-> 本文档带你从零理解这个基于 muduo-core 构建的高性能 RPC 框架。
+> 本文档带你从零理解这个基于官方 muduo 构建的高性能 RPC 框架。
 > 配合源代码阅读效果最佳：每个章节标注了对应的源文件。
 
 ---
@@ -61,16 +61,17 @@ client->asyncCall(          ① 序列化参数 → JSON
 ```
 本项目 myframework
     │
-    └── 依赖 muduo-core（教学精简版）
-         ├── EventLoop    — 事件循环（epoll 封装）
-         ├── TcpServer    — TCP 服务器
-         ├── TcpConnection— 单条 TCP 连接
-         ├── Buffer       — 字节缓冲区
-         ├── Channel      — fd + 事件回调
-         └── ...          — Socket, InetAddress, Poller 等
+    └── 依赖 muduo (chenshuo/muduo)
+         ├── muduo::net::EventLoop    — 事件循环（epoll + TimerQueue）
+         ├── muduo::net::TcpServer    — TCP 服务器
+         ├── muduo::net::TcpClient    — TCP 客户端（含 Connector + 自动重连）
+         ├── muduo::net::TcpConnection— 单条 TCP 连接
+         ├── muduo::net::Buffer       — 字节缓冲区
+         ├── muduo::net::Channel      — fd + 事件回调
+         └── ...                      — Socket, InetAddress, EventLoopThreadPool 等
 ```
 
-**重要限制**：muduo-core 中所有类都在**全局命名空间**，无 `muduo::` 前缀。我的框架统一使用 `myframework::` 命名空间。
+**命名空间**：muduo 类型在 `muduo::net` / `muduo::base` 下，框架通过 `include/myframework/net/MuduoCompat.h` 集中引入别名到 `myframework` 命名空间。
 
 ---
 
@@ -108,7 +109,7 @@ client->asyncCall(          ① 序列化参数 → JSON
    └─────────────────────────────────────────────────┘
                           │
    ┌──────────────────────▼──────────────────────────┐
-   │           muduo-core (网络传输层)                 │
+   │           muduo::net (网络传输层)                │
    │  EventLoop → Poller(epoll) → Channel → TcpConn   │
    └─────────────────────────────────────────────────┘
 ```
@@ -385,35 +386,26 @@ struct RpcContext {
 
 > **文件**: `include/myframework/rpc/RpcClient.h`, `src/RpcClient.cc`
 
-这是最复杂的组件，因为它需要处理非阻塞连接、连接池调度、请求-响应匹配。
+这是最复杂的组件，因为它需要处理连接池调度、请求-响应匹配和超时管理。
 
-#### 连接建立（非阻塞 connect）
-
-muduo-core **没有** `TcpClient` 类，所以客户端的连接需要手动实现：
+#### 连接建立（基于 muduo::net::TcpClient）
 
 ```
 connectPool("127.0.0.1", 9090, N)
     │
-    ├─ ① socket() + fcntl(O_NONBLOCK)         创建非阻塞 socket
-    ├─ ② connect() → 返回 EINPROGRESS           TCP 三次握手开始（异步）
-    ├─ ③ Channel(loop, sockfd)                 创建 epoll 监听
-    │     ch->enableWriting()                   监听 EPOLLOUT 事件
-    │     ch->setWriteCallback(onConnectWrite)
+    ├─ ① InetAddress addr(host, port)      muduo 地址对象
+    ├─ ② new TcpClient(loop, addr, name)   创建客户端
+    │     client->enableRetry()             开启自动重连
+    │     client->setConnectionCallback()    连接/断开通知
+    │     client->setMessageCallback()       数据到达 → codec->onData()
+    │     client->connect()                  非阻塞连接 + Channel 注册
     │
-    └─ 等事件循环运行...
-              │
-         EPOLLOUT 触发（连接完成）
-              │
-    ┌─────────▼──────────────┐
-    │ onConnectWrite(ctx)    │
-    │ ① getsockopt(SO_ERROR) │  检查连接是否成功
-    │ ② 移除旧 Channel        │  避免与 TcpConnection 的 Channel 冲突
-    │ ③ 创建 TcpConnection   │  用成功的 fd 包装
-    │ ④ 设置 RpcCodec        │  每连接一个编解码器
-    │ ⑤ connectEstablished() │  启用读写事件
-    │ ⑥ 加入 channels_[]     │  加入连接池
-    └────────────────────────┘
-```
+    └─ TcpClient 内部自动完成:
+         Connector::start() → socket + connect(EINPROGRESS)
+         → Channel 监听 EPOLLOUT
+         → getsockopt(SO_ERROR) 确认
+         → new TcpConnection + connectEstablished()
+         无需框架写一行 socket 代码!
 
 #### 连接池 + Round-Robin 调度
 
@@ -599,13 +591,12 @@ app.run();
 - 编译更快
 - 后续替换为 Protobuf 时，只需实现一个新的 Serializer 子类
 
-### 5.2 为什么 muduo-core 没有 TcpClient？
+### 5.2 为什么使用 muduo::net::TcpClient？
 
-muduo-core 是**教学精简版**，只保留了服务端的核心类（TcpServer、Acceptor）。本项目手动实现了客户端的非阻塞 connect：
-- `socket()` + `connect()` (EINPROGRESS) 
-- `Channel` 监听 `EPOLLOUT`
-- `getsockopt(SO_ERROR)` 判断连接成功
-- 然后包装为 `TcpConnection`
+本项目现已迁移到官方 muduo (chenshuo/muduo)，直接使用 `muduo::net::TcpClient`：
+- `TcpClient` 内部封装了 `Connector`（非阻塞 connect + EPOLLOUT + SO_ERROR 检查）
+- `enableRetry()` 提供自动断线重连
+- 比旧版手写 140 行 connect 代码更简洁、更可靠
 
 ### 5.3 为什么 seqId 用 atomic 递增？
 
@@ -673,13 +664,22 @@ server.setSerializer(std::make_unique<ProtobufSerializer>());
 client.setSerializer(std::make_unique<ProtobufSerializer>());
 ```
 
-### 6.3 实现超时控制
+### 6.3 超时控制（✓ 已实现）
 
-当前 `timeoutMs` 参数已预留但未生效。需要：
+基于 muduo `EventLoop::runAfter`，每次 RPC 调用自动设置超时定时器：
 
-1. 在 muduo-core 中实现 TimerQueue（或引入定时器库）
-2. 在 `asyncCall` 中启动定时器
-3. 超时时自动调用 `onError` 并清理 `pendingCalls_`
+```cpp
+// asyncCall 内部
+pc->timeoutTimer = loop_->runAfter(timeoutMs / 1000.0,
+    [this, seqId]() {
+        // 超时触发，调用 onError 并清理 pendingCalls_
+    });
+
+// 收到响应时取消定时器
+loop_->cancel(call->timeoutTimer);
+```
+
+心跳保活同样基于 `runEvery` 实现：
 
 ### 6.4 添加服务发现
 

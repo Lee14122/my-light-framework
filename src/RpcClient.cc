@@ -1,20 +1,8 @@
 #include "myframework/rpc/RpcClient.h"
 #include "myframework/Logger.h"
-#include "Channel.h"
-#include "Socket.h"
-#include "InetAddress.h"
-#include "TcpConnection.h"
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <cstring>
-#include <mutex>
-#include <condition_variable>
 #include <future>
+#include <mutex>
 
 namespace myframework {
 
@@ -32,157 +20,110 @@ void RpcClient::setSerializer(std::unique_ptr<Serializer> s) {
     serializer_ = std::move(s);
 }
 
-// ========== 连接建立（非阻塞 connect） ==========
-
-// 每个正在连接的上下文
-struct ConnectContext {
-    RpcClient* client;
-    int sockfd;
-    InetAddress serverAddr;
-    std::unique_ptr<Channel> channel;
-};
-
-void RpcClient::onConnectWrite(ConnectContext* ctx) {
-    // EPOLLOUT 触发，检查连接是否成功
-    int err = 0;
-    socklen_t len = sizeof(err);
-    if (::getsockopt(ctx->sockfd, SOL_SOCKET, SO_ERROR, &err, &len) < 0 || err != 0) {
-        MFLOG_ERROR("RpcClient", "Connect failed: %s", strerror(err));
-        ::close(ctx->sockfd);
-        delete ctx;
-        return;
-    }
-
-    // 先将旧 Channel 从 epoll 中移除（避免与 TcpConnection 的 Channel 冲突）
-    ctx->channel->disableAll();
-    ctx->channel->remove();
-
-    // 获取本地地址
-    struct sockaddr_in localAddr;
-    socklen_t addrLen = sizeof(localAddr);
-    ::getsockname(ctx->sockfd, (struct sockaddr*)&localAddr, &addrLen);
-    InetAddress localInetAddr(localAddr);
-
-    // 创建 RpcChannel
-    auto channel = std::make_unique<RpcChannel>();
-    channel->ready = false;
-
-    // 创建 TcpConnection
-    static std::atomic_int connIdx{0};
-    int idx = connIdx.fetch_add(1);
-    char nameBuf[128];
-    snprintf(nameBuf, sizeof(nameBuf), "rpc-client-%d", idx);
-
-    TcpConnectionPtr conn(new TcpConnection(
-        ctx->client->loop_,
-        nameBuf,
-        ctx->sockfd,
-        localInetAddr,
-        ctx->serverAddr
-    ));
-
-    // 设置 RpcCodec
-    auto codec = std::make_shared<RpcCodec>();
-    codec->setSerializer(std::make_unique<JsonSerializer>());
-
-    RpcChannel* rawChannel = channel.get();
-    RpcClient*  clientPtr  = ctx->client;
-
-    codec->setMessageCallback(
-        [clientPtr, rawChannel](const RpcMessage& msg) {
-            clientPtr->onMessage(rawChannel, msg);
-        });
-
-    channel->conn  = conn;
-    channel->codec = codec;
-
-    // 设置 TcpConnection 回调
-    conn->setConnectionCallback(
-        [clientPtr, rawChannel](const TcpConnectionPtr& c) {
-            if (c->connected()) {
-                rawChannel->ready = true;
-                MFLOG_INFO("RpcClient", "Client channel connected: %s", c->name().c_str());
-                if (clientPtr->connectedCallback_) {
-                    clientPtr->connectedCallback_();
-                }
-            } else {
-                rawChannel->ready = false;
-                MFLOG_INFO("RpcClient", "Client channel disconnected: %s", c->name().c_str());
-            }
-        });
-
-    conn->setMessageCallback(
-        [codec](const TcpConnectionPtr&, Buffer* buf, Timestamp) {
-            codec->onData(buf);
-        });
-
-    conn->setCloseCallback([](const TcpConnectionPtr& c) {
-        MFLOG_INFO("RpcClient", "Client channel closed: %s", c->name().c_str());
-    });
-
-    // 先加入 channels_，再调 connectEstablished（回调中需要 channel 已就绪）
-    ctx->client->channels_.push_back(std::move(channel));
-
-    // 必须在 loop 线程中调用 connectEstablished
-    ctx->client->loop_->runInLoop([conn]() {
-        conn->connectEstablished();
-    });
-
-    delete ctx;
-}
-
-// ========== connect / connectPool ==========
+// ========================================================================
+//  连接管理 — 基于 muduo::net::TcpClient（替换旧版手写非阻塞 connect）
+// ========================================================================
 
 bool RpcClient::connect(const std::string& host, uint16_t port) {
     return connectPool(host, port, 1);
 }
 
 bool RpcClient::connectPool(const std::string& host, uint16_t port, int numConnections) {
-    // InetAddress 构造: (port, ip)
-    InetAddress serverAddr(port, host);
+    // 官方 muduo: InetAddress(ip, port)，参数顺序与 muduo-core 相反
+    InetAddress serverAddr(host, port);
 
     for (int i = 0; i < numConnections; ++i) {
-        int sockfd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (sockfd < 0) {
-            MFLOG_ERROR("RpcClient", "socket() failed: %s", strerror(errno));
-            return false;
-        }
+        char nameBuf[64];
+        snprintf(nameBuf, sizeof(nameBuf), "rpc-client-%zu", channels_.size());
 
-        // 发起非阻塞 connect
-        const struct sockaddr* addr = (const struct sockaddr*)serverAddr.getSockAddr();
-        int ret = ::connect(sockfd, addr, sizeof(struct sockaddr_in));
-        if (ret < 0 && errno != EINPROGRESS) {
-            MFLOG_ERROR("RpcClient", "connect() failed: %s", strerror(errno));
-            ::close(sockfd);
-            return false;
-        }
+        auto ch   = std::make_unique<RpcChannel>();
+        auto tcpClient = std::make_unique<TcpClient>(loop_, serverAddr, nameBuf);
+        tcpClient->enableRetry();   // 断线自动重连
 
-        // 创建 Channel 监听 EPOLLOUT
-        auto* ctx = new ConnectContext;
-        ctx->client     = this;
-        ctx->sockfd     = sockfd;
-        ctx->serverAddr = serverAddr;
+        RpcChannel* rawCh = ch.get();
+        RpcClient*  self  = this;
 
-        auto ch = std::make_unique<Channel>(loop_, sockfd);
-        ch->setWriteCallback([this, ctx]() { onConnectWrite(ctx); });
-        ch->enableWriting();
+        // ---- 连接回调 ----
+        tcpClient->setConnectionCallback(
+            [self, rawCh](const TcpConnectionPtr& conn) {
+                if (conn->connected()) {
+                    rawCh->conn  = conn;
+                    rawCh->ready = true;
+                    MFLOG_INFO("RpcClient", "Channel connected: %s", conn->name().c_str());
+                    self->startHeartbeat(rawCh);
+                    if (self->connectedCallback_) {
+                        self->connectedCallback_();
+                    }
+                } else {
+                    rawCh->ready = false;
+                    MFLOG_INFO("RpcClient", "Channel disconnected: %s", conn->name().c_str());
+                }
+            });
 
-        ctx->channel = std::move(ch);
+        // ---- 消息回调 —— 交给 codec 解帧 ----
+        auto codec = std::make_shared<RpcCodec>();
+        codec->setSerializer(std::make_unique<JsonSerializer>());
+        codec->setMessageCallback(
+            [self, rawCh](const RpcMessage& msg) {
+                self->onMessage(rawCh, msg);
+            });
+
+        tcpClient->setMessageCallback(
+            [codec](const TcpConnectionPtr&, Buffer* buf, Timestamp) {
+                codec->onData(buf);
+            });
+
+        ch->client = std::move(tcpClient);
+        ch->codec  = codec;
+
+        channels_.push_back(std::move(ch));
+
+        // 发起连接（TcpClient 内部完成非阻塞 connect + Channel 管理）
+        channels_.back()->client->connect();
     }
 
+    MFLOG_INFO("RpcClient", "connectPool: %d connection(s) to %s:%u",
+               numConnections, host.c_str(), port);
     return true;
 }
 
 void RpcClient::disconnect() {
+    // 断开连接必须在 loop 线程执行（TcpClient 析构需要）
+    if (!loop_->isInLoopThread()) {
+        loop_->runInLoop([this]() { disconnect(); });
+        return;
+    }
     for (auto& ch : channels_) {
-        if (ch->conn && ch->conn->connected()) {
-            ch->conn->shutdown();
-        }
+        loop_->cancel(ch->heartbeatTimer);
     }
     channels_.clear();
+    pendingCalls_.clear();
 }
 
-// ========== RPC 调用 ==========
+// ========================================================================
+//  心跳 — muduo::net::EventLoop::runEvery
+// ========================================================================
+
+void RpcClient::startHeartbeat(RpcChannel* channel) {
+    if (heartbeatInterval_ <= 0) return;
+
+    channel->heartbeatTimer = channel->client->getLoop()->runEvery(
+        static_cast<double>(heartbeatInterval_),
+        [channel]() {
+            if (channel->ready && channel->conn && channel->conn->connected()) {
+                RpcMessage hb = RpcCodec::makeHeartbeat();
+                channel->conn->send(RpcCodec::encode(hb));
+            }
+        });
+}
+
+void RpcClient::setHeartbeatInterval(int seconds) {
+    heartbeatInterval_ = seconds;
+}
+
+// ========================================================================
+//  RPC 调用 — 线程安全的异步 + 超时
+// ========================================================================
 
 RpcClient::RpcChannel* RpcClient::pickChannel() {
     if (channels_.empty()) return nullptr;
@@ -190,7 +131,9 @@ RpcClient::RpcChannel* RpcClient::pickChannel() {
     size_t start = nextChannelIndex_;
     for (size_t i = 0; i < channels_.size(); ++i) {
         size_t idx = (start + i) % channels_.size();
-        if (channels_[idx]->ready && channels_[idx]->conn && channels_[idx]->conn->connected()) {
+        if (channels_[idx]->ready &&
+            channels_[idx]->conn &&
+            channels_[idx]->conn->connected()) {
             nextChannelIndex_ = (idx + 1) % channels_.size();
             return channels_[idx].get();
         }
@@ -203,7 +146,28 @@ void RpcClient::asyncCall(const std::string& service,
                            const RpcValue& args,
                            SuccessCallback onSuccess,
                            ErrorCallback onError,
-                           int /*timeoutMs*/) {
+                           int timeoutMs) {
+    // 跨线程投递到 loop 线程，保证 pendingCalls_/channels_ 只在 loop 线程读写
+    if (!loop_->isInLoopThread()) {
+        loop_->runInLoop([this, service, method, args,
+                          onSuccess = std::move(onSuccess),
+                          onError   = std::move(onError),
+                          timeoutMs]() mutable {
+            doAsyncCall(service, method, args,
+                        std::move(onSuccess), std::move(onError), timeoutMs);
+        });
+        return;
+    }
+
+    doAsyncCall(service, method, args, std::move(onSuccess), std::move(onError), timeoutMs);
+}
+
+void RpcClient::doAsyncCall(const std::string& service,
+                             const std::string& method,
+                             const RpcValue& args,
+                             SuccessCallback onSuccess,
+                             ErrorCallback onError,
+                             int timeoutMs) {
     RpcChannel* channel = pickChannel();
     if (!channel) {
         MFLOG_ERROR("RpcClient", "No available channel for %s.%s",
@@ -214,12 +178,29 @@ void RpcClient::asyncCall(const std::string& service,
 
     uint32_t seqId = nextSeqId_.fetch_add(1);
 
-    {
-        PendingCall pc;
-        pc.onSuccess = std::move(onSuccess);
-        pc.onError   = std::move(onError);
-        pendingCalls_[seqId] = std::move(pc);
+    auto pc  = std::make_unique<PendingCall>();
+    pc->seqId      = seqId;
+    pc->onSuccess  = std::move(onSuccess);
+    pc->onError    = std::move(onError);
+
+    // 超时定时器（runAfter）
+    if (timeoutMs > 0) {
+        pc->timeoutTimer = loop_->runAfter(
+            timeoutMs / 1000.0,
+            [this, seqId]() {
+                auto it = pendingCalls_.find(seqId);
+                if (it != pendingCalls_.end()) {
+                    auto call = std::move(it->second);
+                    pendingCalls_.erase(it);
+                    MFLOG_WARN("RpcClient", "Request timeout seq=%u", seqId);
+                    if (call->onError) {
+                        call->onError(-5, "Request timeout");
+                    }
+                }
+            });
     }
+
+    pendingCalls_[seqId] = std::move(pc);
 
     std::vector<RpcValue> argsVec = {args};
     std::string payload = serializer_->buildRequest(service, method, argsVec);
@@ -262,9 +243,11 @@ RpcValue RpcClient::syncCall(const std::string& service,
     return RpcValue{};
 }
 
-// ========== 响应处理 ==========
+// ========================================================================
+//  响应处理
+// ========================================================================
 
-void RpcClient::onMessage(RpcChannel* channel, const RpcMessage& msg) {
+void RpcClient::onMessage(RpcChannel* /*channel*/, const RpcMessage& msg) {
     switch (msg.type) {
         case RpcMessage::RESPONSE:
         case RpcMessage::ERROR: {
@@ -277,28 +260,29 @@ void RpcClient::onMessage(RpcChannel* channel, const RpcMessage& msg) {
             auto call = std::move(it->second);
             pendingCalls_.erase(it);
 
+            // 取消超时定时器
+            loop_->cancel(call->timeoutTimer);
+
             if (msg.type == RpcMessage::RESPONSE) {
-                if (call.onSuccess) {
+                if (call->onSuccess) {
                     auto parsed = serializer_->parseResponse(msg.payload);
                     if (parsed.first) {
-                        call.onSuccess(parsed.second);
+                        call->onSuccess(parsed.second);
                     } else {
-                        if (call.onError) call.onError(-3, "Parse error: " + parsed.second);
+                        if (call->onError) call->onError(-3, "Parse error: " + parsed.second);
                     }
                 }
             } else {
-                if (call.onError) {
+                if (call->onError) {
                     auto parsed = serializer_->parseResponse(msg.payload);
-                    call.onError(-4, parsed.second);
+                    call->onError(-4, parsed.second);
                 }
             }
             break;
         }
         case RpcMessage::HEARTBEAT: {
-            if (channel->conn) {
-                RpcMessage pong = RpcCodec::makeHeartbeat();
-                channel->conn->send(RpcCodec::encode(pong));
-            }
+            // 服务端也可能发心跳过来，回复 pong
+            MFLOG_DEBUG("RpcClient", "Heartbeat received");
             break;
         }
         default:
@@ -306,11 +290,9 @@ void RpcClient::onMessage(RpcChannel* channel, const RpcMessage& msg) {
     }
 }
 
-// ========== 配置与统计 ==========
-
-void RpcClient::setHeartbeatInterval(int /*seconds*/) {
-    // v1 暂不实现定时心跳
-}
+// ========================================================================
+//  配置与统计
+// ========================================================================
 
 void RpcClient::setConnectedCallback(ConnectedCallback cb) {
     connectedCallback_ = std::move(cb);

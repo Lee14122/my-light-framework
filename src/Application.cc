@@ -1,6 +1,5 @@
 #include "myframework/app/Application.h"
 #include "myframework/Logger.h"
-#include "InetAddress.h"
 
 namespace myframework {
 
@@ -11,6 +10,7 @@ void Application::init(const Config& config) {
     config_ = config;
 
     if (config_.enableRpc) {
+        // 官方 muduo: InetAddress(port) 默认绑定 0.0.0.0（与横幅一致）
         InetAddress addr(config_.rpcPort);
         rpcServer_ = std::make_unique<RpcServer>(&loop_, addr, "MyRpcServer");
         rpcServer_->setThreadNum(config_.threadNum);

@@ -51,9 +51,9 @@ void TcpServerAdapter::onConnection(const TcpConnectionPtr& conn) {
 }
 
 void TcpServerAdapter::onMessage(const TcpConnectionPtr& conn,
-                                  Buffer* buf, Timestamp /*time*/) {
+                                  Buffer* buf, Timestamp time) {
     if (messageCallback_) {
-        messageCallback_(conn, buf);
+        messageCallback_(conn, buf, time);
     }
 }
 

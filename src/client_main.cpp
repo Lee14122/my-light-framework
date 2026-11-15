@@ -1,16 +1,12 @@
 /**
  * RPC 客户端 Demo
- * 
+ *
  * 运行方式: ./rpc_client [host] [port]
  * 功能: 连接 RPC 服务器，发起多次调用，打印结果
- * 
- * 提示: muduo 内部日志输出到 stdout，若嫌干扰可重定向:
- *       ./rpc_client 2>/dev/null | grep -v '^\[INFO\]'
  */
 #include "myframework/rpc/RpcClient.h"
 #include "myframework/rpc/RpcCodec.h"
 #include "myframework/Logger.h"
-#include "EventLoop.h"
 #include <iostream>
 #include <string>
 #include <memory>

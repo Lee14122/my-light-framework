@@ -2,8 +2,7 @@
 
 #include <memory>
 #include <functional>
-#include <vector>
-#include "Buffer.h"
+#include "myframework/net/MuduoCompat.h"
 #include "myframework/rpc/RpcMessage.h"
 #include "myframework/rpc/Serializer.h"
 
@@ -53,14 +52,8 @@ public:
     static RpcMessage makeHeartbeat();
 
 private:
-    std::string decodePayload(const RpcMessage& msg);
-
     std::unique_ptr<Serializer> serializer_;
     MessageCallback messageCallback_;
-
-    // 内部缓冲区，累积未完整的数据
-    std::vector<char> pendingBuffer_;
-    size_t expectedLen_ = 0;    // 期望的帧长度（0=等待帧头）
 };
 
 } // namespace myframework

@@ -2,12 +2,9 @@
 
 #include <memory>
 #include <functional>
-#include "TcpServer.h"
-#include "Callbacks.h"
+#include "myframework/net/MuduoCompat.h"
 
 namespace myframework {
-
-class Connection;
 
 /**
  * 基础服务器适配层，封装 muduo TcpServer。
@@ -15,9 +12,9 @@ class Connection;
  */
 class TcpServerAdapter {
 public:
-    // 对外回调类型
+    // 对外回调类型（保持 Timestamp 透传，供 idle timeout 等使用）
     using ConnectionCallback = std::function<void(const TcpConnectionPtr&)>;
-    using MessageCallback    = std::function<void(const TcpConnectionPtr&, Buffer*)>;
+    using MessageCallback    = std::function<void(const TcpConnectionPtr&, Buffer*, Timestamp)>;
 
     TcpServerAdapter(EventLoop* loop, const InetAddress& addr, const std::string& name);
     ~TcpServerAdapter();

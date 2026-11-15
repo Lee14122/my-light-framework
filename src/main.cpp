@@ -3,7 +3,6 @@
 #include "myframework/rpc/RpcServer.h"
 #include "myframework/rpc/RpcClient.h"
 #include "myframework/Logger.h"
-#include "EventLoop.h"
 #include <iostream>
 #include <string>
 #include <memory>
