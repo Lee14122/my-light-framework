@@ -1,124 +1,217 @@
 #include "myframework/rpc/Serializer.h"
-#include <sstream>
-#include <cstdio>
+#include "myframework/Logger.h"
+
+#include <cstdint>
+#include <vector>
+#include <stdexcept>
 
 namespace myframework {
 
-// ========== JsonSerializer ==========
+// ============================================================================
+// JsonSerializer — 去掉 JSON-RPC 信封，payload 纯数据
+// ============================================================================
 
-// 简易 JSON 转义（处理 \ " 和控制字符）
-static std::string jsonEscape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + 16);
-    for (char c : s) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:   out += c;      break;
-        }
-    }
-    return out;
-}
-
+// ---- 单值 ----
 std::string JsonSerializer::serialize(const RpcValue& val) {
-    // 直接透传 JSON 字符串（或包装为字符串）
-    return val;
+    return val.value_.dump();
 }
 
 RpcValue JsonSerializer::deserialize(const std::string& data) {
-    return data;
+    try {
+        return RpcValue(nlohmann::json::parse(data));
+    } catch (const nlohmann::json::parse_error& e) {
+        MFLOG_WARN("JsonSerializer", "deserialize failed: %s", e.what());
+        return RpcValue();
+    }
 }
 
-std::string JsonSerializer::buildRequest(const std::string& service,
-                                          const std::string& method,
+// ---- 请求: 只序列化参数数组 [arg0, arg1, ...] ----
+std::string JsonSerializer::buildRequest(const std::string& /*service*/,
+                                          const std::string& /*method*/,
                                           const std::vector<RpcValue>& args) {
-    std::string out;
-    out.reserve(256);
-    out = "{\"jsonrpc\":\"2.0\",\"method\":\"";
-    out += jsonEscape(service);
-    out += ".";
-    out += jsonEscape(method);
-    out += "\",\"params\":[";
-    for (size_t i = 0; i < args.size(); ++i) {
-        if (i > 0) out += ",";
-        out += args[i];  // args 本身已经是 JSON 字符串
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& arg : args) {
+        arr.push_back(arg.value_);
     }
-    out += "],\"id\":0}";
-    return out;
+    return arr.dump();
 }
 
+Result<std::vector<RpcValue>> JsonSerializer::parseRequest(const std::string& payload) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(payload);
+    } catch (const nlohmann::json::parse_error& e) {
+        return Result<std::vector<RpcValue>>::fail(-3,
+            std::string("Parse error: ") + e.what());
+    }
+
+    if (!j.is_array()) {
+        return Result<std::vector<RpcValue>>::fail(-2, "Payload is not an array");
+    }
+
+    std::vector<RpcValue> params;
+    params.reserve(j.size());
+    for (const auto& item : j) {
+        params.push_back(RpcValue(nlohmann::json(item)));
+    }
+    return Result<std::vector<RpcValue>>::success(std::move(params));
+}
+
+// ---- 响应: 返回值本身（无信封）----
 std::string JsonSerializer::buildResponse(const RpcValue& result) {
-    // result 应为 JSON 值字符串
-    std::string out;
-    out.reserve(result.size() + 32);
-    out = "{\"jsonrpc\":\"2.0\",\"result\":";
-    out += result;
-    out += "}";
-    return out;
+    return result.value_.dump();
 }
 
+// ---- 错误: 统一 {"error":{"code":...,"message":...}} ----
 std::string JsonSerializer::buildError(int code, const std::string& message) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%d", code);
-    std::string out;
-    out.reserve(message.size() + 80);
-    out = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":";
-    out += buf;
-    out += ",\"message\":\"";
-    out += jsonEscape(message);
-    out += "\"}}";
-    return out;
+    nlohmann::json err;
+    err["error"]["code"]    = code;
+    err["error"]["message"] = message;
+    return err.dump();
 }
 
-std::pair<bool, RpcValue> JsonSerializer::parseResponse(const std::string& payload) {
-    // 简易 JSON 解析：检查是否含 "error" 字段
-    // 正式版本应使用完整的 JSON 解析器
-    if (payload.find("\"error\"") != std::string::npos) {
-        // 返回错误信息
-        return {false, payload};
+Result<RpcValue> JsonSerializer::parseResponse(const std::string& payload) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(payload);
+    } catch (const nlohmann::json::parse_error& e) {
+        // 解析失败 → 用统一错误格式
+        return Result<RpcValue>::fail(-3,
+            std::string(buildError(-3, std::string("Parse error: ") + e.what())));
     }
-    // 提取 result 字段（简单实现：返回整个 payload）
-    return {true, payload};
+
+    if (j.contains("error") && j["error"].is_object()) {
+        // 真正提取服务端传来的 code 和 message
+        int code = -3;
+        if (j["error"].contains("code")) code = j["error"]["code"].get<int>();
+        
+        std::string msg = "Unknown error";
+        if (j["error"].contains("message")) msg = j["error"]["message"].get<std::string>();
+        
+        return Result<RpcValue>::fail(code, msg); 
+    }
+
+    // 正常响应：payload 就是 result 本身
+    return Result<RpcValue>::success(RpcValue(nlohmann::json(j)));
 }
 
-// ========== BinarySerializer (stub) ==========
+// ============================================================================
+// BinarySerializer — MessagePack，与 JsonSerializer 语义完全一致
+// ============================================================================
 
+namespace {
+
+std::string vecToString(std::vector<uint8_t>&& v) {
+    return std::string(reinterpret_cast<const char*>(v.data()), v.size());
+}
+
+std::vector<uint8_t> stringToVec(const std::string& s) {
+    return std::vector<uint8_t>(s.begin(), s.end());
+}
+
+} // namespace
+
+// ---- 单值 ----
 std::string BinarySerializer::serialize(const RpcValue& val) {
-    return val;
+    try {
+        return vecToString(nlohmann::json::to_msgpack(val.value_));
+    } catch (const std::exception& e) {
+        MFLOG_WARN("BinarySerializer", "serialize failed: %s", e.what());
+        return {};
+    }
 }
 
 RpcValue BinarySerializer::deserialize(const std::string& data) {
-    return data;
+    try {
+        return RpcValue(nlohmann::json::from_msgpack(stringToVec(data)));
+    } catch (const std::exception& e) {
+        MFLOG_WARN("BinarySerializer", "deserialize failed: %s", e.what());
+        return RpcValue();
+    }
 }
 
-std::string BinarySerializer::buildRequest(const std::string& service,
-                                            const std::string& method,
+// ---- 请求: 参数数组 → msgpack ----
+std::string BinarySerializer::buildRequest(const std::string& /*service*/,
+                                            const std::string& /*method*/,
                                             const std::vector<RpcValue>& args) {
-    // 简易实现：用 | 分隔
-    std::string out;
-    out += service + "|" + method;
-    for (const auto& a : args) {
-        out += "|" + a;
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& arg : args) {
+        arr.push_back(arg.value_);
     }
-    return out;
+    try {
+        return vecToString(nlohmann::json::to_msgpack(arr));
+    } catch (const std::exception& e) {
+        MFLOG_WARN("BinarySerializer", "buildRequest failed: %s", e.what());
+        return {};
+    }
 }
 
+Result<std::vector<RpcValue>> BinarySerializer::parseRequest(const std::string& payload) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::from_msgpack(stringToVec(payload));
+    } catch (const std::exception& e) {
+        return Result<std::vector<RpcValue>>::fail(-3,
+            std::string("Parse error: ") + e.what());
+    }
+
+    if (!j.is_array()) {
+        return Result<std::vector<RpcValue>>::fail(-2, "Payload is not an array");
+    }
+
+    std::vector<RpcValue> params;
+    params.reserve(j.size());
+    for (const auto& item : j) {
+        params.push_back(RpcValue(nlohmann::json(item)));
+    }
+    return Result<std::vector<RpcValue>>::success(std::move(params));
+}
+
+// ---- 响应: 返回值本身 → msgpack ----
 std::string BinarySerializer::buildResponse(const RpcValue& result) {
-    return result;
-}
-
-std::string BinarySerializer::buildError(int code, const std::string& message) {
-    return "ERR:" + std::to_string(code) + ":" + message;
-}
-
-std::pair<bool, RpcValue> BinarySerializer::parseResponse(const std::string& payload) {
-    if (payload.size() >= 4 && payload.substr(0, 4) == "ERR:") {
-        return {false, payload};
+    try {
+        return vecToString(nlohmann::json::to_msgpack(result.value_));
+    } catch (const std::exception& e) {
+        MFLOG_WARN("BinarySerializer", "buildResponse failed: %s", e.what());
+        return {};
     }
-    return {true, payload};
+}
+
+// ---- 错误: 同 buildError 格式 → msgpack ----
+std::string BinarySerializer::buildError(int code, const std::string& message) {
+    nlohmann::json err;
+    err["error"]["code"]    = code;
+    err["error"]["message"] = message;
+    try {
+        return vecToString(nlohmann::json::to_msgpack(err));
+    } catch (const std::exception& e) {
+        MFLOG_WARN("BinarySerializer", "buildError failed: %s", e.what());
+        return {};
+    }
+}
+
+Result<RpcValue> BinarySerializer::parseResponse(const std::string& payload) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::from_msgpack(stringToVec(payload));
+    } catch (const std::exception& e) {
+        return Result<RpcValue>::fail(-3,
+            std::string(buildError(-3, std::string("Parse error: ") + e.what())));
+    }
+
+     if (j.contains("error") && j["error"].is_object()) {
+        // 真正提取服务端传来的 code 和 message
+        int code = -3;
+        if (j["error"].contains("code")) code = j["error"]["code"].get<int>();
+        
+        std::string msg = "Unknown error";
+        if (j["error"].contains("message")) msg = j["error"]["message"].get<std::string>();
+        
+        return Result<RpcValue>::fail(code, msg); 
+    }
+
+
+    return Result<RpcValue>::success(RpcValue(nlohmann::json(j)));
 }
 
 } // namespace myframework

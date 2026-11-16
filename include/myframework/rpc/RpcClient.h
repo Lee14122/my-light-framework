@@ -62,7 +62,7 @@ public:
     // 异步调用
     void asyncCall(const std::string& service,
                    const std::string& method,
-                   const RpcValue& args,
+                   const std::vector<RpcValue>& params,
                    SuccessCallback onSuccess,
                    ErrorCallback onError,
                    int timeoutMs = 5000);
@@ -70,7 +70,7 @@ public:
     // 同步调用（内部基于 asyncCall + promise/future）
     RpcValue syncCall(const std::string& service,
                       const std::string& method,
-                      const RpcValue& args,
+                      const std::vector<RpcValue>& params,
                       int timeoutMs = 5000);
 
     // ---- 心跳配置 ----
@@ -101,7 +101,7 @@ private:
 
     void doAsyncCall(const std::string& service,
                      const std::string& method,
-                     const RpcValue& args,
+                     const std::vector<RpcValue>& params, 
                      SuccessCallback onSuccess,
                      ErrorCallback onError,
                      int timeoutMs);

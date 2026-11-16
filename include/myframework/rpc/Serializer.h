@@ -11,73 +11,82 @@ namespace myframework {
 /**
  * 序列化器抽象接口。
  *
+ * 设计原则:
+ *  - 帧头已有 serviceName / methodName / seqId，payload 不再重复携带
+ *  - buildRequest 只序列化参数数组，buildResponse 只序列化返回值本身
+ *  - 所有解析方法统一返回 Result<T>，错误码 + 消息直接可用
+ *
  * 可插拔设计：默认提供 JsonSerializer，用户可实现 ProtobufSerializer 替换。
- * RpcValue 的 typedef 已移至 RpcValue.h 独立封装。
  */
 class Serializer {
 public:
     virtual ~Serializer() = default;
 
-    // 序列化 RpcValue → 网络传输字节流
-    virtual std::string serialize(const RpcValue& val) = 0;
+    // ---- 底层单值互转 ----
+    virtual std::string serialize(const RpcValue& val)   = 0;
+    virtual RpcValue   deserialize(const std::string& data) = 0;
 
-    // 反序列化 网络字节流 → RpcValue
-    virtual RpcValue deserialize(const std::string& data) = 0;
-
-    // ========== RPC 协议层面的便捷方法 ==========
-    // 构建请求 payload
+    // ---- RPC 请求 ----
+    // 构建请求 payload：只序列化参数数组 [arg0, arg1, ...]
     virtual std::string buildRequest(const std::string& service,
                                      const std::string& method,
                                      const std::vector<RpcValue>& args) = 0;
 
-    // 构建正常响应
-    virtual std::string buildResponse(const RpcValue& result) = 0;
+    // 解析请求 payload → 参数数组
+    virtual Result<std::vector<RpcValue>> parseRequest(
+        const std::string& payload) = 0;
 
-    // 构建错误响应
+    // ---- RPC 响应 ----
+    virtual std::string buildResponse(const RpcValue& result) = 0;
     virtual std::string buildError(int code, const std::string& message) = 0;
 
-    // 从响应 payload 中提取结果或错误信息
-    virtual std::pair<bool, RpcValue> parseResponse(const std::string& payload) = 0;
-    // first=true → 正常响应, first=false → 错误 {code, msg}
+    // 解析响应 payload → Result<RpcValue>
+    virtual Result<RpcValue> parseResponse(const std::string& payload) = 0;
 };
 
 /**
- * JSON 序列化器（默认实现，用于开发调试）。
+ * JSON 序列化器（默认实现）。
  *
- * 请求格式: {"jsonrpc":"2.0","method":"Service.Method","params":[...],"id":seqId}
- * 响应格式: {"jsonrpc":"2.0","result":...}
- * 错误格式: {"jsonrpc":"2.0","error":{"code":-1,"message":"..."}}
+ * 线上格式:
+ *   请求: [arg0, arg1, ...]          (纯 JSON 数组)
+ *   正常响应: <result>                 (任意 JSON 值)
+ *   错误响应: {"error":{"code":-1,"message":"..."}}
  */
 class JsonSerializer : public Serializer {
 public:
-    // 直接透传 JSON 字符串
     std::string serialize(const RpcValue& val) override;
-    RpcValue deserialize(const std::string& data) override;
+    RpcValue   deserialize(const std::string& data) override;
 
     std::string buildRequest(const std::string& service,
                              const std::string& method,
                              const std::vector<RpcValue>& args) override;
-    std::string buildResponse(const RpcValue& result) override;
-    std::string buildError(int code, const std::string& message) override;
-    std::pair<bool, RpcValue> parseResponse(const std::string& payload) override;
+    Result<std::vector<RpcValue>> parseRequest(
+        const std::string& payload) override;
+
+    std::string       buildResponse(const RpcValue& result) override;
+    std::string       buildError(int code, const std::string& message) override;
+    Result<RpcValue>  parseResponse(const std::string& payload) override;
 };
 
 /**
- * 二进制序列化器（可选实现，用于追求极致性能的场景）。
+ * 二进制序列化器 — 基于 MessagePack。
  *
- * 使用简单的 TLV 编码或对接 Protobuf。
+ * 与 JsonSerializer 语义完全一致，只是编码从 JSON 文本换成 MessagePack 二进制。
  */
 class BinarySerializer : public Serializer {
 public:
     std::string serialize(const RpcValue& val) override;
-    RpcValue deserialize(const std::string& data) override;
+    RpcValue   deserialize(const std::string& data) override;
 
     std::string buildRequest(const std::string& service,
                              const std::string& method,
                              const std::vector<RpcValue>& args) override;
-    std::string buildResponse(const RpcValue& result) override;
-    std::string buildError(int code, const std::string& message) override;
-    std::pair<bool, RpcValue> parseResponse(const std::string& payload) override;
+    Result<std::vector<RpcValue>> parseRequest(
+        const std::string& payload) override;
+
+    std::string       buildResponse(const RpcValue& result) override;
+    std::string       buildError(int code, const std::string& message) override;
+    Result<RpcValue>  parseResponse(const std::string& payload) override;
 };
 
 } // namespace myframework

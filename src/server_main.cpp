@@ -49,7 +49,7 @@ int main() {
         [](RpcContext& ctx) {
             std::cout << "\n┌─ [EchoService.echo] ──────────────────────────┐\n";
             std::cout << "│  seqId  = " << ctx.seqId << "\n";
-            std::cout << "│  args   = " << ctx.args << "\n";
+            std::cout << "│  args   = " << ctx.args.dump() << "\n";
             std::cout << "│  action = echoing back...\n";
             std::cout << "└──────────────────────────────────────────────┘\n";
             ctx.reply(ctx.args);
@@ -59,10 +59,29 @@ int main() {
     server.registerMethod("CalcService", "add",
         [](RpcContext& ctx) {
             std::cout << "\n┌─ [CalcService.add] ───────────────────────────┐\n";
-            std::cout << "│  args   = " << ctx.args << "\n";
-            std::cout << "│  result = " << ctx.args << " (echo for demo)\n";
+            std::cout << "│  args   = " << ctx.args.dump() << "\n";
+
+            // 参数校验：需要 2 个整数
+            if (ctx.args.size() < 2) {
+                std::cout << "│  ERROR: need 2 arguments\n";
+                std::cout << "└──────────────────────────────────────────────┘\n";
+                ctx.replyError(-1, "Need 2 arguments");
+                return;
+            }
+            auto a = ctx.args[0];
+            auto b = ctx.args[1];
+            if (!a.isInt() || !b.isInt()) {
+                std::cout << "│  ERROR: arguments must be integers\n";
+                std::cout << "└──────────────────────────────────────────────┘\n";
+                ctx.replyError(-2, "Arguments must be integers");
+                return;
+            }
+
+            int64_t sum = a.getInt64() + b.getInt64();
+            std::cout << "│  " << a.getInt64() << " + " << b.getInt64()
+                      << " = " << sum << "\n";
             std::cout << "└──────────────────────────────────────────────┘\n";
-            ctx.reply(ctx.args);
+            ctx.reply(RpcValue(sum));
         });
 
     std::cout << "\n[Server] Registered services:\n";

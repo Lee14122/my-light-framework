@@ -54,9 +54,9 @@ int main(int argc, char* argv[]) {
             pendingCount->fetch_add(1);
             std::cout << "\n[Call #1] EchoService.echo(\"Hello RPC!\")\n";
             client->asyncCall(
-                "EchoService", "echo", "\"Hello RPC!\"",
+                "EchoService", "echo", {"Hello RPC!"},
                 [onDone](const RpcValue& result) {
-                    std::cout << "  ✅ SUCCESS: " << result << "\n";
+                    std::cout << "  ✅ SUCCESS: " << result.dump() << "\n";
                     onDone();
                 },
                 [onDone](int code, const std::string& msg) {
@@ -70,9 +70,9 @@ int main(int argc, char* argv[]) {
             pendingCount->fetch_add(1);
             std::cout << "\n[Call #2] CalcService.add(\"test data\")\n";
             client->asyncCall(
-                "CalcService", "add", "\"test data\"",
+                "CalcService", "add", {3,5},
                 [onDone](const RpcValue& result) {
-                    std::cout << "  ✅ SUCCESS: " << result << "\n";
+                    std::cout << "  ✅ SUCCESS: " << result.dump() << "\n";
                     onDone();
                 },
                 [onDone](int code, const std::string& msg) {
@@ -86,13 +86,30 @@ int main(int argc, char* argv[]) {
             pendingCount->fetch_add(1);
             std::cout << "\n[Call #3] UnknownService.foo(\"should fail\")\n";
             client->asyncCall(
-                "UnknownService", "foo", "\"should fail\"",
+                "UnknownService", "foo", {"should fail"},
                 [onDone](const RpcValue& result) {
-                    std::cout << "  ✅ UNEXPECTED SUCCESS: " << result << "\n";
+                    std::cout << "  ✅ UNEXPECTED SUCCESS: " << result.dump() << "\n";
                     onDone();
                 },
                 [onDone](int code, const std::string& msg) {
                     std::cout << "  ❌ EXPECTED ERROR [" << code << "]: " << msg << "\n";
+                    onDone();
+                });
+        }
+        
+        // 调用 4：传错参数类型（测试防御性编程）
+        {
+            pendingCount->fetch_add(1);
+            client->asyncCall(
+                "CalcService", "add", 
+                { "hello", 123 },  // 传了个字符串和数字
+                [onDone](const RpcValue& result) {
+                    std::cout << "  ✅ UNEXPECTED SUCCESS\n";
+                    onDone();
+                },
+                [onDone](int code, const std::string& msg) {
+                    // 这里应该直接打印出服务端 Handler 里 reject 的信息
+                    std::cout << "  ❌ EXPECTED TYPE ERROR [" << code << "]: " << msg << "\n";
                     onDone();
                 });
         }

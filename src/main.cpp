@@ -26,8 +26,7 @@ int main() {
     app.rpcServer().registerMethod("EchoService", "echo",
         [](RpcContext& ctx) {
             std::cout << "[Server] EchoService.echo called, args="
-                      << ctx.args << std::endl;
-            // 将收到的参数原样返回
+                      << ctx.args.dump() << std::endl;
             ctx.reply(ctx.args);
         });
 
@@ -47,10 +46,10 @@ int main() {
         client->asyncCall(
             "EchoService",
             "echo",
-            "\"Hello, RPC World!\"",
+            {"Hello, RPC World!"},
             // 成功回调
             [&app](const RpcValue& result) {
-                std::cout << "[Client] SUCCESS! Result: " << result << std::endl;
+                std::cout << "[Client] SUCCESS! Result: " << result.dump() << std::endl;
                 std::cout << "===== Demo completed successfully! =====" << std::endl;
                 app.stop();
             },

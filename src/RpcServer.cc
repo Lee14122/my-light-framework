@@ -148,8 +148,18 @@ void RpcServer::dispatch(const TcpConnectionPtr& conn, const RpcMessage& msg) {
     ctx.seqId   = msg.seqId;
     ctx.service = msg.serviceName;
     ctx.method  = msg.methodName;
-    ctx.args    = msg.payload;
     ctx.meta    = msg.meta;
+
+    // 用 Serializer 解析 payload → 参数数组
+    auto parsed = serializer_->parseRequest(msg.payload);
+    if (!parsed.ok) {
+        MFLOG_WARN("RpcServer", "parseRequest failed: %s",
+                   parsed.error.message.c_str());
+        std::string errPayload = serializer_->buildError(-3, parsed.error.message);
+        sendResponse(conn, RpcCodec::makeError(msg.seqId, errPayload));
+        return;
+    }
+    ctx.args = RpcValue::array(std::move(parsed.value));  // [arg0, arg1, ...]
 
     uint32_t seqId = msg.seqId;
     auto connPtr  = conn;

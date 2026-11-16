@@ -143,28 +143,28 @@ RpcClient::RpcChannel* RpcClient::pickChannel() {
 
 void RpcClient::asyncCall(const std::string& service,
                            const std::string& method,
-                           const RpcValue& args,
+                           const std::vector<RpcValue>& params, 
                            SuccessCallback onSuccess,
                            ErrorCallback onError,
                            int timeoutMs) {
     // 跨线程投递到 loop 线程，保证 pendingCalls_/channels_ 只在 loop 线程读写
     if (!loop_->isInLoopThread()) {
-        loop_->runInLoop([this, service, method, args,
+        loop_->runInLoop([this, service, method, params,
                           onSuccess = std::move(onSuccess),
                           onError   = std::move(onError),
                           timeoutMs]() mutable {
-            doAsyncCall(service, method, args,
+            doAsyncCall(service, method, params,
                         std::move(onSuccess), std::move(onError), timeoutMs);
         });
         return;
     }
 
-    doAsyncCall(service, method, args, std::move(onSuccess), std::move(onError), timeoutMs);
+    doAsyncCall(service, method, params, std::move(onSuccess), std::move(onError), timeoutMs);
 }
 
 void RpcClient::doAsyncCall(const std::string& service,
                              const std::string& method,
-                             const RpcValue& args,
+                             const std::vector<RpcValue>& params, 
                              SuccessCallback onSuccess,
                              ErrorCallback onError,
                              int timeoutMs) {
@@ -202,8 +202,8 @@ void RpcClient::doAsyncCall(const std::string& service,
 
     pendingCalls_[seqId] = std::move(pc);
 
-    std::vector<RpcValue> argsVec = {args};
-    std::string payload = serializer_->buildRequest(service, method, argsVec);
+    //std::vector<RpcValue> argsVec = {args};
+    std::string payload = serializer_->buildRequest(service, method, params); 
     RpcMessage req = RpcCodec::makeRequest(seqId, service, method, payload);
 
     std::string encoded = RpcCodec::encode(req);
@@ -212,33 +212,27 @@ void RpcClient::doAsyncCall(const std::string& service,
 
 RpcValue RpcClient::syncCall(const std::string& service,
                               const std::string& method,
-                              const RpcValue& args,
+                              const std::vector<RpcValue>& params,
                               int timeoutMs) {
     std::promise<std::pair<bool, RpcValue>> promise;
     auto future = promise.get_future();
 
-    asyncCall(service, method, args,
+    asyncCall(service, method, params,
         [&promise](const RpcValue& result) {
             promise.set_value({true, result});
         },
         [&promise](int code, const std::string& msg) {
-            std::string err = "{\"error\":{\"code\":" + std::to_string(code) +
-                              ",\"message\":\"" + msg + "\"}}";
-            promise.set_value({false, err});
+            // 错误也封装为 RpcValue
+            RpcValue err{{"code", code}, {"message", msg}};
+            promise.set_value({false, std::move(err)});
         },
         timeoutMs
     );
 
     auto result = future.get();
     if (result.first) {
-        auto parsed = serializer_->parseResponse(result.second);
-        if (parsed.first) {
-            return parsed.second;
-        } else {
-            MFLOG_ERROR("RpcClient", "syncCall response parse error: %s",
-                        parsed.second.c_str());
-            return RpcValue{};
-        }
+        // 回调收到的已是 parseResponse 提取后的 RpcValue，无需再次解析
+        return result.second;
     }
     return RpcValue{};
 }
@@ -266,16 +260,17 @@ void RpcClient::onMessage(RpcChannel* /*channel*/, const RpcMessage& msg) {
             if (msg.type == RpcMessage::RESPONSE) {
                 if (call->onSuccess) {
                     auto parsed = serializer_->parseResponse(msg.payload);
-                    if (parsed.first) {
-                        call->onSuccess(parsed.second);
+                    if (parsed.ok) {
+                        call->onSuccess(parsed.value);
                     } else {
-                        if (call->onError) call->onError(-3, "Parse error: " + parsed.second);
+                        if (call->onError)
+                            call->onError(parsed.error.code, parsed.error.message);
                     }
                 }
             } else {
                 if (call->onError) {
                     auto parsed = serializer_->parseResponse(msg.payload);
-                    call->onError(-4, parsed.second);
+                    call->onError(parsed.error.code, parsed.error.message);
                 }
             }
             break;
