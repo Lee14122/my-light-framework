@@ -4,21 +4,15 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include "myframework/rpc/RpcValue.h"
 
 namespace myframework {
-
-/**
- * RPC 方法参数/返回值抽象。
- *
- * - 默认用 JSON 字符串作为中转格式（方便调试）
- * - 未来可对接 Protobuf / FlatBuffers 实现零拷贝
- */
-using RpcValue = std::string;
 
 /**
  * 序列化器抽象接口。
  *
  * 可插拔设计：默认提供 JsonSerializer，用户可实现 ProtobufSerializer 替换。
+ * RpcValue 的 typedef 已移至 RpcValue.h 独立封装。
  */
 class Serializer {
 public:

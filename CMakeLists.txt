@@ -8,12 +8,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(MUDUO_DIR "${PROJECT_SOURCE_DIR}/third_party/muduo")
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${MUDUO_DIR}/include)
+
+set(NLOHMANN_DIR "${PROJECT_SOURCE_DIR}/third_party/nlohmann")
+include_directories(${NLOHMANN_DIR})
 link_directories(${MUDUO_DIR}/lib)
 
 # 框架库源文件（不含 main）
 set(FRAMEWORK_SOURCES
     src/Logger.cc
     src/Config.cc
+    src/RpcValue.cc
     src/RpcMessage.cc
     src/Serializer.cc
     src/RpcCodec.cc
