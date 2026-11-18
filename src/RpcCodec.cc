@@ -25,6 +25,7 @@ std::string RpcCodec::encode(const RpcMessage& msg) {
     // 先计算长度
     RpcMessage m = msg;
     m.computeLengths();
+    m.checksum = 0;  // CRC16 预留，暂填 0
 
     std::string result;
     result.reserve(m.totalLen);
@@ -36,6 +37,7 @@ std::string RpcCodec::encode(const RpcMessage& msg) {
     uint32_t magic_be    = htonl(m.magic);
     uint32_t totalLen_be = htonl(m.totalLen);
     uint16_t headerLen_be = htons(m.headerLen);
+    uint16_t checksum_be  = htons(m.checksum);
     uint32_t seqId_be    = htonl(m.seqId);
     uint16_t serviceLen_be = htons(m.serviceLen);
     uint16_t methodLen_be  = htons(m.methodLen);
@@ -48,12 +50,13 @@ std::string RpcCodec::encode(const RpcMessage& msg) {
     memcpy(p + offset, &headerLen_be, 2);    offset += 2;
     p[offset] = m.type;                      offset += 1;   // 1 byte, 无需字节序
     p[offset] = m.compress;                  offset += 1;   // 1 byte
+    memcpy(p + offset, &checksum_be, 2);     offset += 2;
     memcpy(p + offset, &seqId_be, 4);        offset += 4;
     memcpy(p + offset, &serviceLen_be, 2);   offset += 2;
     memcpy(p + offset, &methodLen_be, 2);    offset += 2;
     memcpy(p + offset, &metaLen_be, 2);      offset += 2;
     memcpy(p + offset, &payloadLen_be, 4);   offset += 4;
-    // offset 现在应为 28
+    assert(offset == RpcMessage::HEADER_SIZE);
 
     // ---- 可变长字段 ----
     memcpy(p + offset, m.serviceName.data(), m.serviceName.size());
@@ -78,13 +81,14 @@ bool RpcCodec::decode(const char* data, size_t len, RpcMessage& msg) {
 
     // 读帧头（大端 → 主机序）
     uint32_t magic_be, totalLen_be, seqId_be, payloadLen_be;
-    uint16_t headerLen_be, serviceLen_be, methodLen_be, metaLen_be;
+    uint16_t headerLen_be, checksum_be, serviceLen_be, methodLen_be, metaLen_be;
 
     memcpy(&magic_be, data + offset, 4);        offset += 4;
     memcpy(&totalLen_be, data + offset, 4);     offset += 4;
     memcpy(&headerLen_be, data + offset, 2);    offset += 2;
     msg.type    = static_cast<uint8_t>(data[offset]);  offset += 1;
     msg.compress = static_cast<uint8_t>(data[offset]); offset += 1;
+    memcpy(&checksum_be, data + offset, 2);     offset += 2;
     memcpy(&seqId_be, data + offset, 4);        offset += 4;
     memcpy(&serviceLen_be, data + offset, 2);   offset += 2;
     memcpy(&methodLen_be, data + offset, 2);    offset += 2;
@@ -94,6 +98,7 @@ bool RpcCodec::decode(const char* data, size_t len, RpcMessage& msg) {
     msg.magic      = ntohl(magic_be);
     msg.totalLen   = ntohl(totalLen_be);
     msg.headerLen  = ntohs(headerLen_be);
+    msg.checksum   = ntohs(checksum_be);
     msg.seqId      = ntohl(seqId_be);
     msg.serviceLen = ntohs(serviceLen_be);
     msg.methodLen  = ntohs(methodLen_be);

@@ -100,6 +100,7 @@ int main(int argc, char* argv[]) {
         // 调用 4：传错参数类型（测试防御性编程）
         {
             pendingCount->fetch_add(1);
+            std::cout << "\n[Call #4] 传错参数类型（测试防御性编程）\n";
             client->asyncCall(
                 "CalcService", "add", 
                 { "hello", 123 },  // 传了个字符串和数字
@@ -112,6 +113,25 @@ int main(int argc, char* argv[]) {
                     std::cout << "  ❌ EXPECTED TYPE ERROR [" << code << "]: " << msg << "\n";
                     onDone();
                 });
+        }
+        // ======== 调用 5: 尝试发送 JSON 炸弹 ========
+        {
+            {
+                pendingCount->fetch_add(1);
+                std::cout << "\n[Call #5] 发送 600 层嵌套的恶意 JSON\n";
+                std::string attackPayload;
+                for (int i = 0; i < 600; ++i) attackPayload += "[";
+                for (int i = 0; i < 600; ++i) attackPayload += "]";
+
+                // 直接用 RpcValue::parse 拦截，走不到网络层
+                try {
+                    RpcValue badValue = RpcValue::parse(attackPayload);
+                    std::cout << "  ❌ 危险：解析未拦截\n";
+                } catch (const std::exception& e) {
+                    std::cout << "  ✅ 客户端拦截成功: " << e.what() << "\n";
+                }
+                onDone();
+            }
         }
     });
 

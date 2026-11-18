@@ -5,6 +5,25 @@
 namespace myframework {
 
 // ============================================================================
+// rpcErrorCodeString()
+// ============================================================================
+
+const char* rpcErrorCodeString(RpcErrorCode code) {
+    switch (code) {
+    case RpcErrorCode::OK:                      return "OK";
+    case RpcErrorCode::SERVICE_NOT_FOUND:       return "Service not found";
+    case RpcErrorCode::METHOD_NOT_FOUND:        return "Method not found";
+    case RpcErrorCode::PARSE_ERROR:             return "Parse error";
+    case RpcErrorCode::INVALID_ARGUMENT:        return "Invalid argument";
+    case RpcErrorCode::TIMEOUT:                 return "Timeout";
+    case RpcErrorCode::CONNECTION_LOST:         return "Connection lost";
+    case RpcErrorCode::NO_AVAILABLE_CONNECTION: return "No available connection";
+    case RpcErrorCode::UNKNOWN:                 return "Unknown error";
+    default:                                    return "?";
+    }
+}
+
+// ============================================================================
 // 内部辅助: nlohmann::json 类型 → ValueType
 // ============================================================================
 

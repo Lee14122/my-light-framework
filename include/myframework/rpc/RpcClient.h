@@ -15,6 +15,21 @@
 namespace myframework {
 
 /**
+ * 连接池通道状态机。
+ *
+ * CONNECTING  TcpClient 正在连接中（初始状态 / 重连中）
+ * IDLE        已连接，无未完成调用（首选调度目标）
+ * BUSY        已连接，有未完成调用（仍可 pipeline 新调用）
+ * DEAD        已断开，等待 TcpClient::enableRetry() 自动重连
+ */
+enum class ChannelState : uint8_t {
+    CONNECTING = 0,
+    IDLE       = 1,
+    BUSY       = 2,
+    DEAD       = 3,
+};
+
+/**
  * RPC 客户端（基于 muduo::net::TcpClient + TimerQueue）。
  *
  * 功能:
@@ -85,15 +100,16 @@ public:
     int pendingCalls() const;
 
 private:
-    // 一个 RPC 连接通道
+    // 一个 RPC 连接通道（含状态机）
     struct RpcChannel {
         std::unique_ptr<TcpClient> client;
         TcpConnectionPtr           conn;
         std::shared_ptr<RpcCodec>  codec;
-        std::atomic_bool           ready;
+        std::atomic<ChannelState>  state;         // 连接状态机
+        int                        pendingCount = 0;  // 未完成调用数（仅 loop 线程读写）
         muduo::net::TimerId        heartbeatTimer;
 
-        RpcChannel() : ready(false) {}
+        RpcChannel() : state(ChannelState::CONNECTING) {}
     };
 
     void onMessage(RpcChannel* channel, const RpcMessage& msg);
@@ -109,13 +125,21 @@ private:
     // 待处理的调用（仅在 loop 线程读写，无需锁）
     struct PendingCall {
         uint32_t           seqId;
+        RpcChannel*        channel = nullptr;  // 所属通道（用于断连时精准清理）
         SuccessCallback    onSuccess;
         ErrorCallback      onError;
         muduo::net::TimerId timeoutTimer;
+        bool               hasTimeout = false;
     };
 
     // 心跳
     void startHeartbeat(RpcChannel* channel);
+
+    // 状态机辅助
+    // 断连时精准清理：仅 fail 属于该通道的未完成调用
+    void failPendingCallsOnChannel(RpcChannel* channel, int code, const std::string& msg);
+    // 调用完成/超时后递减通道 pendingCount，归零时 BUSY → IDLE
+    void decrementChannelPending(RpcChannel* channel);
 
     EventLoop* loop_;
     std::unique_ptr<Serializer> serializer_;

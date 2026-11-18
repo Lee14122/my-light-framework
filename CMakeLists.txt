@@ -41,6 +41,42 @@ add_executable(rpc_client
 )
 target_link_libraries(rpc_client muduo_net muduo_base pthread)
 
+# ---- 协议 Round-Trip 单元测试 ----
+add_executable(test_codec_roundtrip
+    src/test/test_codec_roundtrip.cpp
+    src/RpcMessage.cc
+    src/RpcCodec.cc
+    src/Serializer.cc
+    src/RpcValue.cc
+    src/Logger.cc
+)
+target_link_libraries(test_codec_roundtrip muduo_net muduo_base pthread)
+
+# ---- 超时机制测试 ----
+add_executable(test_timeout
+    src/test/test_timeout.cpp
+    ${FRAMEWORK_SOURCES}
+)
+target_link_libraries(test_timeout muduo_net muduo_base pthread)
+
+# ---- DoS 抗攻击测试 ----
+add_executable(test_server_dos
+    src/test/test_server_dos.cpp
+    src/RpcMessage.cc
+    src/RpcCodec.cc
+    src/Serializer.cc
+    src/RpcValue.cc
+    src/Logger.cc
+)
+target_link_libraries(test_server_dos muduo_net muduo_base pthread)
+
+# ---- 连接池性能基准测试 ----
+add_executable(benchmark_connection_pool
+    src/test/benchmark_connection_pool.cpp
+    ${FRAMEWORK_SOURCES}
+)
+target_link_libraries(benchmark_connection_pool muduo_net muduo_base pthread)
+
 # ---- 一体化 Demo（原有）----
 add_executable(server
     src/main.cpp

@@ -37,24 +37,24 @@ std::string JsonSerializer::buildRequest(const std::string& /*service*/,
 }
 
 Result<std::vector<RpcValue>> JsonSerializer::parseRequest(const std::string& payload) {
-    nlohmann::json j;
     try {
-        j = nlohmann::json::parse(payload);
-    } catch (const nlohmann::json::parse_error& e) {
-        return Result<std::vector<RpcValue>>::fail(-3,
-            std::string("Parse error: ") + e.what());
-    }
+        // 必须走 RpcValue::parse，这样深度检查才会生效！
+        RpcValue paramsArray = RpcValue::parse(payload); 
+        
+        if (!paramsArray.isArray()) {
+            return Result<std::vector<RpcValue>>::fail(static_cast<int>(RpcErrorCode::PARSE_ERROR), "Payload is not an array");
+        }
 
-    if (!j.is_array()) {
-        return Result<std::vector<RpcValue>>::fail(-2, "Payload is not an array");
+        std::vector<RpcValue> params;
+        params.reserve(paramsArray.size());
+        for (size_t i = 0; i < paramsArray.size(); ++i) {
+            params.push_back(paramsArray[i]); // 用你封装的 operator[] 取出来
+        }
+        return Result<std::vector<RpcValue>>::success(std::move(params));
+        
+    } catch (const std::exception& e) {
+        return Result<std::vector<RpcValue>>::fail(static_cast<int>(RpcErrorCode::PARSE_ERROR), std::string("Parse error: ") + e.what());
     }
-
-    std::vector<RpcValue> params;
-    params.reserve(j.size());
-    for (const auto& item : j) {
-        params.push_back(RpcValue(nlohmann::json(item)));
-    }
-    return Result<std::vector<RpcValue>>::success(std::move(params));
 }
 
 // ---- 响应: 返回值本身（无信封）----
@@ -71,28 +71,22 @@ std::string JsonSerializer::buildError(int code, const std::string& message) {
 }
 
 Result<RpcValue> JsonSerializer::parseResponse(const std::string& payload) {
-    nlohmann::json j;
     try {
-        j = nlohmann::json::parse(payload);
-    } catch (const nlohmann::json::parse_error& e) {
-        // 解析失败 → 用统一错误格式
-        return Result<RpcValue>::fail(-3,
-            std::string(buildError(-3, std::string("Parse error: ") + e.what())));
-    }
+        // 同样走安全大门
+        RpcValue resp = RpcValue::parse(payload); 
 
-    if (j.contains("error") && j["error"].is_object()) {
-        // 真正提取服务端传来的 code 和 message
-        int code = -3;
-        if (j["error"].contains("code")) code = j["error"]["code"].get<int>();
-        
-        std::string msg = "Unknown error";
-        if (j["error"].contains("message")) msg = j["error"]["message"].get<std::string>();
-        
-        return Result<RpcValue>::fail(code, msg); 
-    }
+        if (resp.isObject() && resp.contains("error")) {
+            int code = static_cast<int>(RpcErrorCode::PARSE_ERROR);
+            if (resp["error"].contains("code")) code = resp["error"]["code"].getInt();
+            std::string msg = "Unknown error";
+            if (resp["error"].contains("message")) msg = resp["error"]["message"].getString();
+            return Result<RpcValue>::fail(code, msg); 
+        }
 
-    // 正常响应：payload 就是 result 本身
-    return Result<RpcValue>::success(RpcValue(nlohmann::json(j)));
+        return Result<RpcValue>::success(resp);
+    } catch (const std::exception& e) {
+        return Result<RpcValue>::fail(static_cast<int>(RpcErrorCode::PARSE_ERROR), std::string("Parse error: ") + e.what());
+    }
 }
 
 // ============================================================================
@@ -151,12 +145,12 @@ Result<std::vector<RpcValue>> BinarySerializer::parseRequest(const std::string& 
     try {
         j = nlohmann::json::from_msgpack(stringToVec(payload));
     } catch (const std::exception& e) {
-        return Result<std::vector<RpcValue>>::fail(-3,
+        return Result<std::vector<RpcValue>>::fail(static_cast<int>(RpcErrorCode::PARSE_ERROR),
             std::string("Parse error: ") + e.what());
     }
 
     if (!j.is_array()) {
-        return Result<std::vector<RpcValue>>::fail(-2, "Payload is not an array");
+        return Result<std::vector<RpcValue>>::fail(static_cast<int>(RpcErrorCode::PARSE_ERROR), "Payload is not an array");
     }
 
     std::vector<RpcValue> params;
@@ -195,13 +189,13 @@ Result<RpcValue> BinarySerializer::parseResponse(const std::string& payload) {
     try {
         j = nlohmann::json::from_msgpack(stringToVec(payload));
     } catch (const std::exception& e) {
-        return Result<RpcValue>::fail(-3,
-            std::string(buildError(-3, std::string("Parse error: ") + e.what())));
+        return Result<RpcValue>::fail(static_cast<int>(RpcErrorCode::PARSE_ERROR),
+            std::string(buildError(static_cast<int>(RpcErrorCode::PARSE_ERROR), std::string("Parse error: ") + e.what())));
     }
 
      if (j.contains("error") && j["error"].is_object()) {
         // 真正提取服务端传来的 code 和 message
-        int code = -3;
+        int code = static_cast<int>(RpcErrorCode::PARSE_ERROR);
         if (j["error"].contains("code")) code = j["error"]["code"].get<int>();
         
         std::string msg = "Unknown error";

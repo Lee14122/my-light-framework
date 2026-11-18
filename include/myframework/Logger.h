@@ -2,6 +2,7 @@
 
 #include <string>
 #include <functional>
+#include <optional>
 
 namespace myframework {
 
@@ -27,6 +28,13 @@ private:
     Logger() = default;
     LogLevel level_ = LogLevel::DEBUG;
 };
+
+// ============================================================================
+// 工具函数：字符串 → LogLevel 转换（大小写不敏感）
+// ============================================================================
+
+/// 将字符串转为 LogLevel 枚举。非法字符串返回 std::nullopt。
+std::optional<LogLevel> parseLogLevel(const std::string& levelStr);
 
 // 日志宏
 #define MFLOG_DEBUG(tag, fmt, ...)  myframework::logFormat(myframework::LogLevel::DEBUG, tag, fmt, ##__VA_ARGS__)

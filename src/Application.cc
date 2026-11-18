@@ -9,6 +9,15 @@ Application::~Application() = default;
 void Application::init(const Config& config) {
     config_ = config;
 
+    // --- logLevel 生效：Application 作为胶水层，连接 Config → Logger ---
+    if (auto parsed = parseLogLevel(config_.logLevel)) {
+        Logger::instance().setLevel(*parsed);
+    } else {
+        MFLOG_WARN("App", "Unknown logLevel '%s', fallback to DEBUG",
+                   config_.logLevel.c_str());
+        Logger::instance().setLevel(LogLevel::DEBUG);
+    }
+
     if (config_.enableRpc) {
         // 官方 muduo: InetAddress(port) 默认绑定 0.0.0.0（与横幅一致）
         InetAddress addr(config_.rpcPort);

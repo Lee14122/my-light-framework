@@ -28,6 +28,31 @@ enum class ValueType : uint8_t {
 };
 
 // ============================================================================
+// 统一错误码
+// ============================================================================
+
+enum class RpcErrorCode : int {
+    OK                      = 0,
+
+    // ---- 服务端错误 ----
+    SERVICE_NOT_FOUND       = -1,   // 服务未注册
+    METHOD_NOT_FOUND        = -2,   // 方法未注册
+    PARSE_ERROR             = -3,   // payload 解析失败 (非法 JSON / 深度超限 / 不是数组)
+    INVALID_ARGUMENT        = -4,   // handler 内参数校验失败（类型不对、数量不够等）
+
+    // ---- 客户端错误 ----
+    TIMEOUT                 = -5,   // 调用超时
+    CONNECTION_LOST         = -6,   // 连接断开（通道进入 DEAD 状态）
+    NO_AVAILABLE_CONNECTION = -7,   // 连接池无可用通道（全 DEAD / CONNECTING）
+
+    // ---- 通用 ----
+    UNKNOWN                 = -99,  // 未知错误（兜底，如 handler 抛异常）
+};
+
+/// 获取错误码对应的简短描述文本
+const char* rpcErrorCodeString(RpcErrorCode code);
+
+// ============================================================================
 // 错误信息
 // ============================================================================
 
@@ -37,6 +62,8 @@ struct RpcError {
 
     RpcError() : code(0) {}
     RpcError(int c, std::string msg) : code(c), message(std::move(msg)) {}
+    RpcError(RpcErrorCode c, std::string msg)
+        : code(static_cast<int>(c)), message(std::move(msg)) {}
 };
 
 // ============================================================================

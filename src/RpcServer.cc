@@ -124,7 +124,8 @@ void RpcServer::dispatch(const TcpConnectionPtr& conn, const RpcMessage& msg) {
     auto svcIt = services_.find(msg.serviceName);
     if (svcIt == services_.end()) {
         MFLOG_WARN("RpcServer", "Service not found: %s", msg.serviceName.c_str());
-        std::string errPayload = serializer_->buildError(-1,
+        std::string errPayload = serializer_->buildError(
+            static_cast<int>(RpcErrorCode::SERVICE_NOT_FOUND),
             "Service not found: " + msg.serviceName);
         sendResponse(conn, RpcCodec::makeError(msg.seqId, errPayload));
         return;
@@ -134,7 +135,8 @@ void RpcServer::dispatch(const TcpConnectionPtr& conn, const RpcMessage& msg) {
     if (methodIt == svcIt->second.end()) {
         MFLOG_WARN("RpcServer", "Method not found: %s.%s",
                    msg.serviceName.c_str(), msg.methodName.c_str());
-        std::string errPayload = serializer_->buildError(-2,
+        std::string errPayload = serializer_->buildError(
+            static_cast<int>(RpcErrorCode::METHOD_NOT_FOUND),
             "Method not found: " + msg.methodName);
         sendResponse(conn, RpcCodec::makeError(msg.seqId, errPayload));
         return;
@@ -155,7 +157,8 @@ void RpcServer::dispatch(const TcpConnectionPtr& conn, const RpcMessage& msg) {
     if (!parsed.ok) {
         MFLOG_WARN("RpcServer", "parseRequest failed: %s",
                    parsed.error.message.c_str());
-        std::string errPayload = serializer_->buildError(-3, parsed.error.message);
+        std::string errPayload = serializer_->buildError(
+            static_cast<int>(RpcErrorCode::PARSE_ERROR), parsed.error.message);
         sendResponse(conn, RpcCodec::makeError(msg.seqId, errPayload));
         return;
     }
@@ -176,7 +179,28 @@ void RpcServer::dispatch(const TcpConnectionPtr& conn, const RpcMessage& msg) {
         sendResponse(connPtr, resp);
     };
 
-    methodIt->second(ctx);
+    // 调用 handler（用户代码可能抛异常，捕获防止炸 loop）
+    try {
+        methodIt->second(ctx);
+    } catch (const std::exception& e) {
+        MFLOG_ERROR("RpcServer", "Handler exception in %s.%s: %s",
+                    msg.serviceName.c_str(), msg.methodName.c_str(), e.what());
+        if (connPtr->connected()) {
+            std::string errPayload = serializer_->buildError(
+                static_cast<int>(RpcErrorCode::UNKNOWN),
+                std::string("Handler exception: ") + e.what());
+            sendResponse(connPtr, RpcCodec::makeError(msg.seqId, errPayload));
+        }
+    } catch (...) {
+        MFLOG_ERROR("RpcServer", "Handler unknown exception in %s.%s",
+                    msg.serviceName.c_str(), msg.methodName.c_str());
+        if (connPtr->connected()) {
+            std::string errPayload = serializer_->buildError(
+                static_cast<int>(RpcErrorCode::UNKNOWN),
+                "Handler threw unknown exception");
+            sendResponse(connPtr, RpcCodec::makeError(msg.seqId, errPayload));
+        }
+    }
 }
 
 // ========== 发送响应 ==========

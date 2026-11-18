@@ -4,6 +4,8 @@
 #include <mutex>
 #include <ctime>
 #include <string>
+#include <cstring>
+#include <algorithm>
 
 namespace myframework {
 
@@ -64,6 +66,20 @@ void logFormat(LogLevel lv, const char* tag, const char* fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     Logger::instance().log(lv, tag, buf);
+}
+
+std::optional<LogLevel> parseLogLevel(const std::string& levelStr) {
+    // 转大写后比较
+    std::string upper = levelStr;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+
+    if (upper == "DEBUG") return LogLevel::DEBUG;
+    if (upper == "INFO")  return LogLevel::INFO;
+    if (upper == "WARN")  return LogLevel::WARN;
+    if (upper == "ERROR") return LogLevel::ERROR;
+    if (upper == "FATAL") return LogLevel::FATAL;
+
+    return std::nullopt;
 }
 
 } // namespace myframework

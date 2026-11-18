@@ -1,4 +1,5 @@
 #include "myframework/Config.h"
+#include <stdexcept>
 
 namespace myframework {
 
@@ -17,6 +18,26 @@ Config::Builder& Config::Builder::rpcPort(uint16_t p) { conf_.rpcPort = p; retur
 Config::Builder& Config::Builder::rpcTimeout(int ms) { conf_.rpcTimeoutMs = ms; return *this; }
 
 Config Config::Builder::build() {
+    // --- 校验 ---
+    if (conf_.threadNum < 0) {
+        throw std::invalid_argument("Config: threadNum must be >= 0, got " +
+                                    std::to_string(conf_.threadNum));
+    }
+
+    if (conf_.enableHttp && conf_.httpPort == 0) {
+        throw std::invalid_argument("Config: httpPort must be 1-65535 when enableHttp=true");
+    }
+    if (conf_.enableRpc && conf_.rpcPort == 0) {
+        throw std::invalid_argument("Config: rpcPort must be 1-65535 when enableRpc=true");
+    }
+
+    if (conf_.httpTimeoutSec < 0) {
+        throw std::invalid_argument("Config: httpTimeout must be >= 0");
+    }
+    if (conf_.rpcTimeoutMs < 0) {
+        throw std::invalid_argument("Config: rpcTimeoutMs must be >= 0");
+    }
+
     return conf_;
 }
 

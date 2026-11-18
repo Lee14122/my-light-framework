@@ -14,8 +14,11 @@ namespace myframework {
  * │  magic   │ totalLen │ hdrLen   │  type    │ compress │
  * │ 4 bytes  │ 4 bytes  │ 2 bytes  │ 1 byte   │ 1 byte   │
  * ├──────────┼──────────┼──────────┼──────────┼──────────┤
- * │  seqId   │ svcNameLen│ methNameLen│ metaLen │  payloadLen│
- * │ 4 bytes  │ 2 bytes   │ 2 bytes   │ 2 bytes │ 4 bytes    │
+ * │ checksum │  seqId   │ svcNameLen│ methNameLen│ metaLen │
+ * │ 2 bytes  │ 4 bytes  │ 2 bytes   │ 2 bytes   │ 2 bytes │
+ * ├──────────┼──────────┼──────────┼──────────┼──────────┤
+ * │payloadLen│                                               │
+ * │ 4 bytes  │                                               │
  * ├──────────┴──────────┴──────────┴──────────┴──────────┤
  * │   service_name [svcNameLen]                           │
  * │   method_name  [methNameLen]                          │
@@ -48,11 +51,16 @@ struct RpcMessage {
     uint16_t headerLen    = HEADER_SIZE;
     uint8_t  type         = REQUEST;
     uint8_t  compress     = NONE;
+    uint16_t checksum     = 0;          // CRC16 预留字段（暂填 0）
     uint32_t seqId        = 0;          // 序列号，用于请求-响应匹配
     uint16_t serviceLen   = 0;
     uint16_t methodLen    = 0;
     uint16_t metaLen      = 0;
     uint32_t payloadLen   = 0;
+
+    // ---- 编译期帧头长度校验 ----
+    static_assert(4 + 4 + 2 + 1 + 1 + 2 + 4 + 2 + 2 + 2 + 4 == HEADER_SIZE,
+                  "Protocol field sizes do not match HEADER_SIZE!");
 
     // ---- 可变长字段 ----
     std::string serviceName;             // 服务名（如 "UserService"）
